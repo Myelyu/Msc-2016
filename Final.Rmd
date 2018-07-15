@@ -1,0 +1,268 @@
+---
+title: "Final"
+author: "Elena Myazina"
+date: '11 июля 2018 г '
+output: html_document
+lang: ru-RU
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+Подключаем необходимые библиотеки
+```{r}
+library(tidyverse) # обработка данных, графики...
+library(ggplot2)
+library(skimr) # описательные статистики
+library(rio) # импорт фантастического количества форматов данных
+library(Ecdat) # много-много разных наборов данных
+library(FFTrees) # быстрые деревья
+library(margins) # для подсчёта предельных эффектов
+library(rpart.plot) # для картинок деревьев
+library(plotROC) # визуализация ROC-кривой
+library(ggeffects) # графики для предельных эффектов
+library(MLmetrics) # метрики качества
+library(ranger) # строим деревья
+library(cluster) # кластерный анализ
+library(broom)
+library(factoextra)
+library(vcd)
+library(corrplot)
+```
+
+#1. Набор данных
+
+#Для анализа была выбрана статистика об уплате налоговыми агентами налогов на доходы физических лиц ФНС по региону Москва (в разрезе муниципальных образований) за 2016 год - https://www.nalog.ru/rn77/related_activities/statistics_and_analytics/forms/. Она самая свежая - за 2017 год данных еще нет. Выкладывается в заархивированном виде в отдельных файлах для каждого муниципалитета. Для удобства с помощью Visual Basic необходимые данные были собраны в отдельный эксель-файл и сохранены в файле Moscow-2016-working.xlsx.
+
+#Обозначения в шапке таблицы:
+
+#MO - Муниципальное образование
+#Q - Количество физических лиц, получивших доходы (чел.)
+#Average_monthly - Среднемесячный доход до налогов (всех по муниципалитету)
+#Population - Среднегодовая численность населения в муниципалитете (чел.)
+
+#Последующий анализ проводился исходя из того, что в России НДФЛ платится не по прописке налогоплательщика, а по его месту работы. То есть данные о плательщиках НДФЛ в определенном муниципалитете можно сравнить с численностью населения в нем и превышение над средним означает наплыв рабочей силы, в противном случае - отток.
+
+#Данные по численности населения взяты отсюда - http://moscow.gks.ru/wps/wcm/connect/rosstat_ts/moscow/ru/statistics/population/ и сохранены в файле Population-average-2016.xlsx.
+
+
+```{r}
+data1 <- import('Moscow-2016-work.xlsx')
+skim(data1)
+data2 <- import('Population-average-2016.xlsx')
+skim(data2)
+```
+
+#2. Описательный анализ данных
+
+#В двух файлах разное количество переменных. В первом - 13, во втором - 2. Количество наблюдений одинаково - 146. Все типы переменных - числовые, кроме столбца с названиями муниципальных образований.
+
+#Для дальнейшего анализа и иллюстрации объединяем оба файла.
+
+```{r}
+income_taxes <- full_join(data1, data2, by = 'MO')
+skim(income_taxes)
+glimpse(income_taxes)
+
+```
+
+#В объединенном файле сохранилось количество наблюдений - 146. Переменных стало 14 (добавился один столбец с численностью населения в каждом муниципалитете).
+#Все переменные кроме названий муниципалитетов - числовые.
+
+#Построим гистограммы для среднего месячного дохода (столбец `Average_monthly`).
+
+```{r}
+
+qplot(data = income_taxes, x = Average_monthly) +
+  labs(x = 'Средний ежемесячный доход до налогов, руб.', title = 'Гистограмма среднемесячного дохода в Москве')
+```
+
+```{r}
+qplot(data = income_taxes, x = Average_monthly, y = Q, col = "red") +
+  labs(x = 'Средний ежемесячный доход, руб.', y = 'Количество получивших доходы в муниципалитете', title = 'Диаграмма рассеяния количества получателей дохода в муниципалитете и их средних ежемесячных доходов')
+```
+
+
+#Добавим на график локальную полиноминальную регрессию и стандартную ошибку:
+
+```{r}
+qplot(data = income_taxes, x = Average_monthly, y = Q, col = "red", geom=c("point", "smooth")) + labs(x = 'Средний ежемесячный доход, руб.', y = 'Количество получивших доходы в муниципалитете', title = 'Диаграмма рассеяния количества получателей дохода в муниципалитете и их средних ежемесячных доходов')
+```
+
+
+#Добавляем в таблицу самый важный показатель - соотношение числа налогоплательщиков, вернее, получателей дохода в муниципалитете и населения (жителей, учитываемых статистикой) :
+
+```{r}
+income_taxes <- mutate(income_taxes, work_pop = Q/Population)
+skim(income_taxes)
+```
+
+```{r}
+barplot(income_taxes$work_pop, col = "green")
+```
+
+```{r}
+barplot(income_taxes$Average_monthly, col = "green")
+```
+
+```{r}
+qplot(data = income_taxes, x = Average_monthly, y = work_pop, col = "red", geom=c("point", "smooth")) + labs(x = 'Средний ежемесячный доход, руб.', y = 'Соотношение работающих и проживающих в муниципалитете', title = 'Диаграмма рассеяния средних ежемесячных доходов и деловой активности')
+```
+
+#Построим корреляционные матрицы:
+
+```{r}
+inc_cor1 <- cor(income_taxes$Average_monthly, income_taxes$work_pop)
+inc_cor1
+inc_cor2 <- cor(income_taxes$Q, income_taxes$Average_monthly)
+inc_cor2
+```
+
+#Удаляем столбец с наименованиями муниципалитетов, а затем строим матрицу:
+
+```{r}
+income_taxes_cor <- income_taxes[, -c(1)]
+skim(income_taxes_cor)
+
+inc_cor3 <- cor(income_taxes_cor)
+inc_cor3
+
+```
+
+```{r}
+corrplot(inc_cor3) # график с аргументами по умолчанию
+```
+
+```{r}
+corrplot(inc_cor3, method = 'number') # график со значениями корреляции
+```
+
+
+
+#3. Кластеризация методом k-средних
+
+#Масштабируем данные:
+
+```{r}
+income_taxes_stand <- mutate_if(income_taxes, is.numeric, ~ as.vector(scale(.)))
+skim(income_taxes_stand )
+```
+
+#Убираем столбец MO и превращаем его в метки строк:
+
+```{r}
+income_taxes_claster <- income_taxes_stand %>% column_to_rownames(var = 'MO')
+income_taxes_claster_kmeans <- kmeans(income_taxes_claster, centers = 5)
+income_taxes_claster_kmeans
+```
+
+```{r}
+attributes(income_taxes_claster_kmeans)
+```
+
+#Координаты центров кластеров, количество объектов, размер:
+
+```{r}
+income_taxes_claster_kmeans$centers
+```
+
+```{r}
+income_taxes_claster_kmeans$cluster
+```
+
+```{r}
+income_taxes_claster_kmeans$size
+```
+
+```{r}
+fviz_cluster(object = income_taxes_claster_kmeans, data = income_taxes_claster, ellipse.type = 'convex')
+```
+
+
+#Подбор оптимального числа кластеров:
+
+```{r}
+g1 <- fviz_nbclust(income_taxes_claster, kmeans, method = 'wss') +
+  labs(subtitle = 'Elbow method')
+g1
+```
+
+```{r}
+g2 <- fviz_nbclust(income_taxes_claster, kmeans, method = 'silhouette') +
+  labs(subtitle = 'Silhouette method')
+g2
+```
+
+```{r}
+g3 <- fviz_nbclust(income_taxes_claster, kmeans, method = 'gap_stat') +
+  labs(subtitle = 'Gap statistic method')
+g3
+```
+
+#Возвращаемся к кластеризации и меняем количество кластеров на 3:
+
+```{r}
+income_taxes_claster <- income_taxes_stand %>% column_to_rownames(var = 'MO')
+income_taxes_claster_kmeans <- kmeans(income_taxes_claster, centers = 3)
+income_taxes_claster_kmeans
+```
+
+#Иллюстрируем:
+
+```{r}
+fviz_cluster(object = income_taxes_claster_kmeans, data = income_taxes_claster, ellipse.type = 'convex')
+```
+
+#Что показывает график:
+
+#В 1 кластере (73 объекта) с наиболее высокими средними ежемесячными доходами;
+
+#Во 2 кластере с небольшим количеством объектов (12) находятся в основном центральные муниципалитеты Москвы, где количество получающих доходы заметно превышает количество проживающих (прописанных);
+
+#В 3 кластере (61 объект) - нецентральные муниципалитеты с невысокими показателями средних ежемесячных доходов, значительным количеством жителей и невысоким превышением работающих над прописанными
+
+#BSS/TSS =  56.6 %
+
+
+#Проверим на 2 кластерах:
+```{r}
+income_taxes_claster <- income_taxes_stand %>% column_to_rownames(var = 'MO')
+income_taxes_claster_kmeans <- kmeans(income_taxes_claster, centers = 2)
+income_taxes_claster_kmeans
+```
+
+#Иллюстрируем:
+
+```{r}
+fviz_cluster(object = income_taxes_claster_kmeans, data = income_taxes_claster, ellipse.type = 'convex')
+```
+
+#BSS/TSS =  39.0 %, таким образом 3 кластера лучше, чем 2, а 5 лучше, чем 3
+
+#При разбиении набора данных на 5 кластеров:
+
+#Q Average_monthly  Population    work_pop
+#1 -0.5035259      -0.2716228 -1.20201999 -0.26616535
+#2 -0.2576199       2.7827579 -0.77176749 -0.06008229
+#3  3.0141252      -0.2735346 -0.09082760  2.85106711
+#4 -0.1558558       0.1198399  0.05552871 -0.19391399
+#5 -0.2466921      -0.5214087  1.32118206 -0.40345004
+
+
+#4.	Оценка модели линейной регрессии
+
+
+#Буду учить матчасть
+
+
+#5.	Классификация
+
+
+#В данном наборе без анализа динамики какие-либо прогнозы мне кажутся сомнительными. Не те данные выбрала, чтобы строить прогноз и оценивать его качество. 
+
+#6.	Загрузка работы в репозиторий:
+
+https://github.com/Myelyu/Msc-2016
+
